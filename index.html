@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Pickleball with official-style rules: singles, doubles, rally scoring, tournaments, practice and online play.">
+  <meta name="theme-color" content="#0a1626">
+  <title>Pickle Rally</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23dff23c' stroke='%2397ad1a' stroke-width='2'/><circle cx='11' cy='12' r='2' fill='%2397ad1a'/><circle cx='20' cy='13' r='2' fill='%2397ad1a'/><circle cx='15' cy='21' r='2' fill='%2397ad1a'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+</head>
+<body>
+  <canvas id="view" aria-label="Pickleball court"></canvas>
+  <div id="boot" class="boot">Loading court…</div>
+
+  <!-- ============================ HUD ============================ -->
+  <div id="hud" hidden>
+    <div class="scorebug" aria-live="polite">
+      <div class="sb-row" data-team="0"><i class="sb-chip"></i><span class="sb-name"></span><span class="sb-tag"></span><span class="sb-serve"></span><span class="sb-games"></span><b class="sb-pts"></b></div>
+      <div class="sb-row" data-team="1"><i class="sb-chip"></i><span class="sb-name"></span><span class="sb-tag"></span><span class="sb-serve"></span><span class="sb-games"></span><b class="sb-pts"></b></div>
+      <div class="sb-meta"><span id="hud-game"></span><span id="hud-format"></span><span id="hud-time"></span></div>
+    </div>
+    <div class="callbox"><small>Score</small><b id="hud-call">0-0-2</b></div>
+    <div id="hud-banner" class="banner" hidden><b></b><span></span></div>
+    <div id="hud-clock" class="clock" hidden></div>
+    <div id="hud-prompt" class="prompt" hidden></div>
+    <div id="hud-practice" class="practice-card" hidden>
+      <div class="pc-title"></div>
+      <div class="pc-goal"></div>
+      <div class="pc-stats"><span><b data-k="success">0</b>/<b data-k="attempts">0</b> made</span><span>Streak <b data-k="streak">0</b></span><span>Best <b data-k="best">0</b></span></div>
+    </div>
+    <div id="hud-feedback" class="feedback" hidden></div>
+    <button id="btn-pause" class="chip-btn" type="button" aria-label="Pause">❚❚</button>
+  </div>
+
+  <div id="touch" hidden>
+    <div id="stick" class="stick"><div class="knob"></div></div>
+    <div class="shot-pad">
+      <button type="button" data-act="drop" class="sm">Drop</button>
+      <button type="button" data-act="lob">Lob</button>
+      <button type="button" data-act="dink">Soft</button>
+      <button type="button" data-act="drive" class="big">Drive</button>
+    </div>
+  </div>
+
+  <!-- ============================ SCREENS ============================ -->
+  <div id="ui">
+    <section class="screen" id="scr-main">
+      <div class="hero">
+        <div class="logo"><span class="logo-ball"></span><h1>Pickle<span>Rally</span></h1></div>
+        <p class="lede">Pickleball played to official rules. Singles, doubles, side-out and rally scoring.</p>
+      </div>
+      <nav class="menu">
+        <button type="button" class="tile primary" data-go="quick"><b>Quick Match</b><span>Singles or doubles vs the CPU</span></button>
+        <button type="button" class="tile" data-go="tournament"><b>Tournament</b><span>8-player bracket, three rounds</span></button>
+        <button type="button" class="tile" data-go="practice"><b>Practice</b><span>Serve, return, dink, volley, position</span></button>
+        <button type="button" class="tile" data-go="local"><b>Local Multiplayer</b><span>Two players, one keyboard</span></button>
+        <button type="button" class="tile" data-go="online"><b>Online</b><span>Play a friend with a room code</span></button>
+        <button type="button" class="tile" data-go="tutorials"><b>Tutorials</b><span>Rules, lessons and scoring quiz</span></button>
+        <button type="button" class="tile" data-go="stats"><b>Statistics</b><span>Your career record</span></button>
+        <button type="button" class="tile" data-go="settings"><b>Settings</b><span>Sound, camera, graphics, controls</span></button>
+      </nav>
+    </section>
+
+    <section class="screen panel" id="scr-setup" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2 id="setup-title">Quick Match</h2></header>
+      <div class="cols">
+        <div>
+          <h3>Players</h3>
+          <div id="setup-players" class="players"></div>
+        </div>
+        <div>
+          <h3>Match setup</h3>
+          <div class="field"><label>Type</label><div class="seg" data-key="doubles"><button type="button" data-v="false">Singles</button><button type="button" data-v="true">Doubles</button></div></div>
+          <div class="field"><label>Scoring</label><div class="seg" data-key="format"><button type="button" data-v="sideout">Traditional</button><button type="button" data-v="rally">Rally</button></div></div>
+          <div class="field"><label>Game to</label><div class="seg" data-key="target"><button type="button" data-v="11">11</button><button type="button" data-v="15">15</button><button type="button" data-v="21">21</button></div></div>
+          <div class="field"><label>Match</label><div class="seg" data-key="games"><button type="button" data-v="1">1 game</button><button type="button" data-v="3">Best of 3</button></div></div>
+          <div class="field" id="field-level"><label>CPU level</label><div class="seg" data-key="level"><button type="button" data-v="beginner">Beginner</button><button type="button" data-v="intermediate">Intermediate</button><button type="button" data-v="advanced">Advanced</button></div></div>
+          <p class="note" id="setup-note"></p>
+        </div>
+      </div>
+      <footer><button type="button" class="btn primary" id="btn-start">Start match</button></footer>
+    </section>
+
+    <section class="screen panel" id="scr-practice" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Practice</h2></header>
+      <p class="lede small">A ball machine feeds you shots. Each drill keeps score of your successful attempts.</p>
+      <div class="cards" id="drill-list"></div>
+    </section>
+
+    <section class="screen panel" id="scr-tournament" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Tournament</h2></header>
+      <div id="tour-body"></div>
+    </section>
+
+    <section class="screen panel narrow" id="scr-online" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Online</h2></header>
+      <p class="lede small">The two browsers connect directly to each other. The host runs the match and the guest plays the far side.</p>
+      <button type="button" class="btn primary" id="btn-host">Host a match</button>
+      <div class="or">or join a friend</div>
+      <form id="join-form" class="join"><input id="join-code" maxlength="5" placeholder="ROOM CODE" autocomplete="off" spellcheck="false" aria-label="Room code"><button class="btn" type="submit">Join</button></form>
+      <p class="status" id="join-status" role="status"></p>
+    </section>
+
+    <section class="screen panel narrow" id="scr-room" hidden>
+      <header><button type="button" class="back" data-back>‹ Cancel</button><h2>Your room</h2></header>
+      <div class="code" id="room-code">·····</div>
+      <p class="lede small">Send this code, or the link, to your opponent:</p>
+      <div class="join"><input id="room-link" readonly aria-label="Invite link"><button type="button" class="btn" id="btn-copy">Copy</button></div>
+      <p class="status" id="room-status" role="status"></p>
+    </section>
+
+    <section class="screen panel" id="scr-tutorials" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Tutorials</h2></header>
+      <div class="cards" id="lesson-list"></div>
+    </section>
+
+    <section class="screen panel narrow" id="scr-lesson" hidden>
+      <header><button type="button" class="back" data-back>‹ Lessons</button><h2 id="lesson-title"></h2></header>
+      <div id="lesson-body" class="prose"></div>
+      <footer id="lesson-actions"></footer>
+    </section>
+
+    <section class="screen panel narrow" id="scr-quiz" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Scoring quiz</h2></header>
+      <div id="quiz-body"></div>
+    </section>
+
+    <section class="screen panel" id="scr-stats" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Statistics</h2></header>
+      <div id="stats-body"></div>
+      <footer><button type="button" class="btn ghost" id="btn-reset-stats">Reset statistics</button></footer>
+    </section>
+
+    <section class="screen panel" id="scr-settings" hidden>
+      <header><button type="button" class="back" data-back>‹ Back</button><h2>Settings</h2></header>
+      <div class="cols">
+        <div>
+          <h3>Game</h3>
+          <div class="field"><label for="set-name">Your name</label><input id="set-name" maxlength="16"></div>
+          <div class="field"><label>Your color</label><div class="swatches" id="set-color"></div></div>
+          <div class="field"><label for="set-volume">Volume</label><input id="set-volume" type="range" min="0" max="1" step="0.05"></div>
+          <div class="field"><label>Ball landing marker</label><div class="seg" data-set="marker"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
+          <div class="field"><label>Rule hints</label><div class="seg" data-set="hints"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
+          <div class="field"><label>Show FPS</label><div class="seg" data-set="fps"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
+        </div>
+        <div>
+          <h3>Controls</h3>
+          <table class="keys">
+            <tr><th></th><th>Solo</th><th>Local P1</th><th>Local P2</th></tr>
+            <tr><td>Move / aim</td><td>WASD or arrows</td><td>WASD</td><td>Arrows</td></tr>
+            <tr><td>Drive / smash</td><td>J or Space</td><td>F</td><td>. or Num 2</td></tr>
+            <tr><td>Soft (dink)</td><td>K</td><td>G</td><td>, or Num 1</td></tr>
+            <tr><td>Lob</td><td>L</td><td>R</td><td>/ or Num 3</td></tr>
+            <tr><td>Drop serve</td><td>H</td><td>Q</td><td>Enter or Num 0</td></tr>
+            <tr><td>Pause</td><td colspan="3">Esc or P</td></tr>
+          </table>
+          <p class="note">Press a shot as the ball comes to you. The swing makes contact by itself as the ball reaches your paddle. Movement keys held at contact aim the shot: left or right picks a side, forward goes deep and back goes short.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen panel narrow" id="scr-pause" hidden>
+      <header><h2>Paused</h2></header>
+      <div class="stack">
+        <button type="button" class="btn primary" id="btn-resume">Resume</button>
+        <button type="button" class="btn" id="btn-restart">Restart</button>
+        <button type="button" class="btn" id="btn-pause-settings">Settings</button>
+        <button type="button" class="btn ghost" id="btn-quit">Quit to menu</button>
+      </div>
+    </section>
+
+    <section class="screen panel" id="scr-results" hidden>
+      <header><h2 id="res-title"></h2></header>
+      <div id="res-body"></div>
+      <footer id="res-actions"></footer>
+    </section>
+  </div>
+
+  <div id="fps" class="fps" hidden></div>
+  <div id="rotate">Turn your phone sideways for the best view</div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
