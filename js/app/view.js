@@ -60,9 +60,9 @@ export function sceneModel(m, humanIds, view, cache) {
   let humanTeam = -1, teams = 0;
   m.players.forEach((p, i) => {
     const o = model.players[i], human = humanIds.includes(p.id);
-    o.id = p.id; o.team = p.team; o.color = p.color;
+    o.id = p.id; o.team = p.team; o.color = p.color; o.char = p.char;
     o.x = lerpPos(p.px, p.x, a); o.z = lerpPos(p.pz, p.z, a);
-    o.vx = p.vx; o.vz = p.vz; o.swingAnim = p.swingAnim; o.swingKind = p.swingKind; o.human = human;
+    o.vx = p.vx; o.vz = p.vz; o.swingAnim = p.swingAnim; o.swingKind = p.swingKind; o.human = human; o.contact = p.contact;
     if (human && humanTeam !== p.team) { humanTeam = p.team; teams++; }
   });
   model.ball.x = lerpPos(b.px, b.x, a);

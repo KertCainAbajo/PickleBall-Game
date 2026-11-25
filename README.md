@@ -2,7 +2,9 @@
 
 A pickleball game for the browser, played to USA Pickleball rules. Singles and doubles, traditional side-out and rally scoring, AI opponents, practice drills, tournaments, tutorials, local two-player and online play.
 
-- No build step: plain JavaScript modules, a lightweight 2D canvas renderer (no WebGL or graphics card needed), and [PeerJS](https://peerjs.com/) for peer-to-peer online play.
+- No build step: plain JavaScript modules and [PeerJS](https://peerjs.com/) for peer-to-peer online play.
+- **Graphics** (Settings): *Realistic 3D* ([Three.js](https://threejs.org/), needs a hardware GPU) or *Lite 2D* (plain canvas, runs on anything). *Auto* picks 3D when the browser can use the graphics card, and falls back to 2D if 3D can't stay smooth.
+- Realistic human players in 3D: add free Adobe Mixamo characters. See [assets/characters/README.md](assets/characters/README.md).
 - No game server, so it hosts free on GitHub Pages, Netlify or Cloudflare Pages.
 
 ## Play locally

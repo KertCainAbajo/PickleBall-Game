@@ -11,10 +11,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    } }
+  </script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
 </head>
 <body>
   <canvas id="view" aria-label="Pickleball court"></canvas>
+  <canvas id="view3d" aria-label="Pickleball court in 3D" hidden></canvas>
   <div id="boot" class="boot">Loading court…</div>
 
   <!-- ============================ HUD ============================ -->
@@ -142,11 +149,14 @@
         <div>
           <h3>Game</h3>
           <div class="field"><label for="set-name">Your name</label><input id="set-name" maxlength="16"></div>
-          <div class="field"><label>Your color</label><div class="swatches" id="set-color"></div></div>
+          <div class="field"><label>Team color</label><div class="swatches" id="set-color"></div></div>
+          <div class="field field-col"><label>Your character</label><div id="set-char"></div></div>
           <div class="field"><label for="set-volume">Volume</label><input id="set-volume" type="range" min="0" max="1" step="0.05"></div>
+          <div class="field"><label>Graphics</label><div class="seg" data-set="graphics"><button type="button" data-v="auto">Auto</button><button type="button" data-v="high">High</button><button type="button" data-v="medium">Medium</button><button type="button" data-v="low">Low</button><button type="button" data-v="2d">Lite 2D</button></div></div>
+          <p class="note">High, Medium and Low use realistic 3D and need the browser to use your graphics card. Auto starts at Medium (or Lite 2D without a graphics card) and steps down by itself if the game can't stay smooth.</p>
           <div class="field"><label>Ball landing marker</label><div class="seg" data-set="marker"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
           <div class="field"><label>Rule hints</label><div class="seg" data-set="hints"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
-          <div class="field"><label>Show FPS</label><div class="seg" data-set="fps"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
+          <div class="field"><label>Developer mode (F3)</label><div class="seg" data-set="dev"><button type="button" data-v="true">On</button><button type="button" data-v="false">Off</button></div></div>
         </div>
         <div>
           <h3>Controls</h3>
@@ -182,6 +192,15 @@
   </div>
 
   <div id="fps" class="fps" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="gpu-tip" class="gpu-tip" hidden>
+    <b>Your browser is drawing without your graphics card</b>, which holds the game to about 25–30 FPS.
+    For a smooth 60 FPS, do one of these in <code>chrome://settings/system</code>, then click Relaunch:
+    turn <b>on</b> graphics acceleration and set Chrome to your graphics card in Windows <i>Settings → Display → Graphics</i>,
+    <u>or</u> turn <b>off</b> “Use graphics acceleration when available”.
+    <button type="button">Got it</button>
+  </div>
+  <div id="load3d" class="load3d" hidden><span>Loading realistic 3D…</span><b><i></i></b></div>
   <div id="rotate">Turn your phone sideways for the best view</div>
 
   <script type="module" src="js/main.js"></script>

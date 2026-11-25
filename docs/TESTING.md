@@ -44,3 +44,24 @@ chrome --headless=new --virtual-time-budget=120000 --dump-dom http://localhost:8
 7. Statistics update after a match. Reset clears them.
 8. Settings persist after a reload, including name, color, volume, marker, hints, camera and graphics.
 9. Phone in landscape: joystick and shot buttons work; the HUD fits.
+
+## Performance
+
+Measured in headless Chrome on the development machine, using the real modules and real frame timing. Numbers depend on hardware. GPU time on a real graphics card was not measurable there (the test browser has no GPU); those CPU-side numbers are marked.
+
+| Measure | Before | After |
+|---|---|---|
+| 2D first frame (startup freeze), emulated GPU | 1,824 ms | 126 ms |
+| 2D frame avg / p95 / max (renderer benchmark) | 13.4 / 53 / 61 ms | 2.8 / 4.5 / 8.8 ms |
+| 2D background blit, emulated GPU | 12.4 ms | 0.36 ms |
+| 3D shader compile | 1.5 s freeze when 3D appeared | done in `prepare()` during background loading |
+| 3D draw calls | 148 | 111 |
+| GPU geometries / textures after 5 new matches | +46 / +40 (leak) | +1 / 0 |
+| 3D CPU frame max (spike) | 15.5 ms | 13.6 ms |
+
+Full-app scenarios (open, menu, match start, 20 s doubles rally, pause and resume, singles, 5 consecutive matches):
+
+- **Working GPU, or Chrome graphics acceleration off:** a steady 60 FPS in every scenario, zero frames over 33 ms, opens in 0.8 s, and JS heap back to about 2.5 MB after each of 5 matches.
+- **Broken GPU acceleration** (WebGL on "Microsoft Basic Render Driver" or SwiftShader): Chrome's compositing caps the page at about 25–30 FPS whatever the game draws. Frame pacing keeps it at an even ~30 FPS (long frames during rallies went from 73% to 9%). Menu throttling took the menu from 10 to 30 FPS. The game shows a one-time tip with both measured fixes.
+
+How to re-run: serve the folder, open the game, press **F3** for the developer monitor, then play each scenario and watch the frame time, max and draw calls.

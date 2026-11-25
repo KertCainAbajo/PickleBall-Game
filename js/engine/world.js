@@ -15,6 +15,7 @@ export function createPlayer(id, team, idx, spec = {}) {
     id, team, idx,
     name: spec.name || `Player ${id + 1}`,
     color: spec.color ?? (team === 0 ? 0 : 1),
+    char: spec.char || null,       // look only; no effect on play
     ctrl: spec.ctrl || 'ai',       // 'human' | 'ai' | 'remote'
     level: spec.level || 'intermediate',
     x: 0, z: C.teamZ(team) * 20, vx: 0, vz: 0,
@@ -110,6 +111,9 @@ function movePlayer(p, dt) {
   if (p.z > bd.z1) { p.z = bd.z1; p.vz = 0; }
   p.swingT = Math.max(0, p.swingT - dt);
   p.swingAnim = Math.max(0, p.swingAnim - dt);
+  // Hold the backswing while the swing is armed and the ball hasn't arrived,
+  // so the stroke visibly meets the ball instead of finishing early.
+  if (p.swingT > 0 && p.swingAnim < C.SWING_ANIM * 0.65) p.swingAnim = C.SWING_ANIM * 0.65;
 }
 
 function holdBall(b) {
@@ -249,7 +253,10 @@ export function launch(w, p, shot, quality = 1) {
   b.lastHitter = p;
   b.hitAt = w.time;
   w.shotId++;
-  p.swingAnim = Math.max(p.swingAnim, C.SWING_ANIM * 0.45);
+  // Jump the stroke to its contact pose and remember where the ball was
+  // (relative to the player) so renderers can put the paddle face on it.
+  p.swingAnim = C.SWING_ANIM * 0.55;
+  p.contact = { x: b.x - p.x, y: b.y, z: b.z - p.z };
   p.swingKind = kind;
   w.events.push(kind === 'smash' ? 'smash' : 'hit');
   return kind;

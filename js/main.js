@@ -6,6 +6,7 @@ import { createTournament, nextMatch, recordResult, entrant, ROUND_NAMES } from 
 import { createScore, rallyWon, scoreCall } from './engine/scoring.js';
 import { firstBounce, renderAlpha, lerpPos } from './engine/world.js';
 import { Renderer2D, PLAYER_COLORS } from './render/render2d.js';
+import { CHARACTERS, charById, pickCharacters, drawPortrait } from './render/characters.js';
 import { hudModel, sceneModel, resultsModel, fmtTime } from './app/view.js';
 import { LESSONS } from './app/lessons.js';
 import { hostRoom, joinRoom } from './net.js';
@@ -22,16 +23,119 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('pickle-rally:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem('pickle-rally:' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const settings = Object.assign({ name: 'You', color: 0, volume: 0.8, marker: true, hints: true, fps: false }, store.get('settings', {}));
+const settings = Object.assign({ name: 'You', color: 0, char: 'ace', graphics: 'auto', volume: 0.8, marker: true, hints: true, dev: false }, store.get('settings', {}));
 // Older saves defaulted to 'high'; switch them to the adaptive mode once.
-const setup = Object.assign({ doubles: false, format: 'sideout', target: 11, games: 1, level: 'intermediate', p2name: 'Player 2', p2color: 1 }, store.get('setup', {}));
+const setup = Object.assign({ doubles: false, format: 'sideout', target: 11, games: 1, level: 'intermediate', p2name: 'Player 2', p2color: 1, p2char: 'luna' }, store.get('setup', {}));
 const defaultCareer = () => ({ matches: 0, wins: 0, losses: 0, local: 0, online: 0, pointsFor: 0, pointsAgainst: 0, aces: 0, longestRally: 0, faults: {}, playTime: 0, tournaments: 0, titles: 0, bestFinish: null, practice: { attempts: 0, success: 0 } });
 let career = Object.assign(defaultCareer(), store.get('career', {}));
 let tour = store.get('tournament', null);
 setVolume(settings.volume);
 
 // ---------------------------------------------------------------- renderer
-const renderer = new Renderer2D($('#view'));
+// Graphics levels: High / Medium / Low use the 3D renderer; Lite 2D runs on anything.
+// Auto picks a level from the hardware, then only steps DOWN when measured frame
+// times stay too long (stable thresholds + cooldown, so it never flip-flops).
+const LADDER = ['high', 'medium', 'low', '2d'];
+const renderer2d = new Renderer2D($('#view'));
+let renderer = renderer2d, renderer3d = null, gfx = '2d', level = '2d', loading3d = null;
+
+/** Does this browser have a real (hardware) GPU for WebGL? */
+function probeGPU() {
+  try {
+    const c = document.createElement('canvas'), gl = c.getContext('webgl2') || c.getContext('webgl');
+    if (!gl) return { ok: false, gpu: 'no WebGL' };
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const gpu = String((dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER));
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return { ok: !/swiftshader|software|llvmpipe|basic render/i.test(gpu), gpu };
+  } catch { return { ok: false, gpu: 'error' }; }
+}
+const gpuInfo = probeGPU();
+// WebGL that runs on a software renderer (e.g. "Microsoft Basic Render Driver") means
+// Chrome's graphics acceleration is broken; compositing then caps the game around
+// 25-30 FPS. Measured fixes: a working GPU, or acceleration switched off (60 FPS).
+const brokenGPU = !gpuInfo.ok && !/no WebGL|error/.test(gpuInfo.gpu);
+if (settings.graphics === '3d') { settings.graphics = 'auto'; store.set('settings', settings); }   // old setting name
+
+function use2D(note) {
+  gfx = '2d'; level = '2d';
+  renderer = renderer2d;
+  $('#view').hidden = false;
+  $('#view3d').hidden = true;
+  if (note) toast(note);
+}
+
+/** Load 3D in the background (2D keeps running), then switch when fully ready. */
+async function use3D(q) {
+  level = q;
+  if (renderer3d) { renderer3d.setQuality(q); show3D(); return; }
+  if (loading3d) return;
+  const bar = $('#load3d'), fill = bar.querySelector('i'), label = bar.querySelector('span');
+  const progress = p => { fill.style.width = `${Math.round(p * 100)}%`; label.textContent = `Loading realistic 3D… ${Math.round(p * 100)}%`; };
+  bar.hidden = false; progress(0.02);
+  loading3d = (async () => {
+    try {
+      const mod = await import('./render/scene3d.js');
+      progress(0.1);
+      const r3 = new mod.Renderer3D($('#view3d'));
+      r3.setQuality(level === '2d' ? 'medium' : level);
+      await r3.prepare(p => progress(0.1 + 0.9 * p));
+      renderer3d = r3;
+      if (level !== '2d') show3D();
+    } catch (e) {
+      console.warn('3D unavailable, using 2D', e);
+      use2D('Realistic 3D could not load, so the game is using Lite 2D.');
+    } finally {
+      bar.hidden = true;
+      loading3d = null;
+    }
+  })();
+}
+
+function show3D() {
+  gfx = '3d';
+  renderer = renderer3d;
+  renderer3d.setQuality(level);
+  perf.reset(performance.now());
+  $('#view3d').hidden = false;
+  $('#view').hidden = true;
+}
+
+function applyGraphics() {
+  const want = settings.graphics;
+  if (want === '2d' || (want === 'auto' && !gpuInfo.ok)) return use2D();
+  use3D(want === 'auto' ? 'medium' : want);
+}
+
+/** Frame-time watchdog for Auto: two bad 2-second windows in a row -> one step down, then an 8 s cooldown. */
+const perf = {
+  win: [], winStart: 0, strikes: 0, cooldownUntil: 0,
+  reset(now) { this.win.length = 0; this.winStart = now; this.strikes = 0; this.cooldownUntil = now + 6000; },
+  sample(ms, now) {
+    if (settings.graphics !== 'auto' || gfx !== '3d' || document.hidden || ms > 250) return;
+    this.win.push(ms);
+    if (now - this.winStart < 2000) return;
+    const sorted = [...this.win].sort((x, y) => x - y);
+    const avg = this.win.reduce((x, y) => x + y, 0) / this.win.length, p90 = sorted[Math.floor(sorted.length * 0.9)];
+    this.win.length = 0; this.winStart = now;
+    this.strikes = avg > 19 || p90 > 30 ? this.strikes + 1 : 0;
+    if (this.strikes >= 2 && now > this.cooldownUntil) {
+      const next = LADDER[Math.min(LADDER.length - 1, LADDER.indexOf(level) + 1)];
+      if (next === '2d') use2D('Switched to Lite 2D graphics to keep the game smooth.');
+      else { level = next; renderer3d.setQuality(next); toast(`Graphics lowered to ${next[0].toUpperCase() + next.slice(1)} to keep the game smooth.`); }
+      this.reset(now);
+    }
+  },
+};
+
+let toastTimer = 0;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+}
 
 // ---------------------------------------------------------------- screens
 let screen = null;
@@ -96,6 +200,8 @@ addEventListener('keydown', e => {
   for (const h of S.humans) { const a = actionFor(h.scheme, e.code); if (a) doAction(h, a); }
 });
 addEventListener('keyup', e => keys.delete(e.code));
+// F3 toggles the developer performance monitor.
+addEventListener('keydown', e => { if (e.code === 'F3') { e.preventDefault(); settings.dev = !settings.dev; store.set('settings', settings); } });
 addEventListener('blur', () => keys.clear());
 addEventListener('pointerdown', unlockAudio);
 
@@ -154,8 +260,8 @@ function enterGame() {
 }
 
 function startDemo() {
-  const names = pickCpu(4);
-  const m = createMatch({ doubles: true, format: 'rally', target: 11, teams: [[0, 1].map(i => ({ name: names[i], color: 0, level: 'advanced' })), [2, 3].map(i => ({ name: names[i], color: 1, level: 'advanced' }))] });
+  const names = pickCpu(4), chars = pickCharacters(4);
+  const m = createMatch({ doubles: true, format: 'rally', target: 11, teams: [[0, 1].map(i => ({ name: names[i], color: 0, level: 'advanced', char: chars[i] })), [2, 3].map(i => ({ name: names[i], color: 1, level: 'advanced', char: chars[i] }))] });
   S = matchSession('demo', m, []);
   $('#hud').hidden = true;
   $('#touch').hidden = true;
@@ -169,12 +275,21 @@ function toMenu() {
   backStack.length = 0;
 }
 
-function you() { return { name: settings.name || 'You', color: settings.color, ctrl: 'human' }; }
+function you() { return { name: settings.name || 'You', color: settings.color, char: settings.char, ctrl: 'human' }; }
+
+/** Give every player spec without a character a random one not already in use. */
+function assignChars(specs) {
+  const used = specs.map(s => s.char).filter(Boolean);
+  const free = pickCharacters(specs.length, used);
+  let i = 0;
+  for (const s of specs) if (!s.char) s.char = free[i++];
+}
 
 function startQuick() {
   const me = you(), cpuColor = otherColor(me.color), names = pickCpu(3), lvl = setup.level;
   const t0 = [me], t1 = [{ name: names[0], color: cpuColor, level: lvl }];
   if (setup.doubles) { t0.push({ name: names[1], color: me.color, level: lvl }); t1.push({ name: names[2], color: cpuColor, level: lvl }); }
+  assignChars([...t0, ...t1]);
   const m = createMatch({ ...matchCfg(), teams: [t0, t1] });
   S = matchSession('match', m, [{ id: 0, scheme: 'solo' }], { mode: 'quick', myTeam: 0, restart: startQuick });
   enterGame();
@@ -182,9 +297,10 @@ function startQuick() {
 
 function startLocal() {
   const c1 = settings.color, c2 = setup.p2color === c1 ? otherColor(c1) : setup.p2color;
-  const p1 = { name: settings.name || 'Player 1', color: c1, ctrl: 'human' }, p2 = { name: setup.p2name || 'Player 2', color: c2, ctrl: 'human' };
+  const p1 = { name: settings.name || 'Player 1', color: c1, char: settings.char, ctrl: 'human' }, p2 = { name: setup.p2name || 'Player 2', color: c2, char: setup.p2char, ctrl: 'human' };
   const names = pickCpu(2), t0 = [p1], t1 = [p2];
   if (setup.doubles) { t0.push({ name: names[0], color: c1, level: setup.level }); t1.push({ name: names[1], color: c2, level: setup.level }); }
+  assignChars([...t0, ...t1]);
   const m = createMatch({ ...matchCfg(), teams: [t0, t1] });
   const p2id = m.teams[1][0].id;
   S = matchSession('match', m, [{ id: 0, scheme: 'p1' }, { id: p2id, scheme: 'p2' }], { mode: 'local', myTeam: null, restart: startLocal });
@@ -198,6 +314,7 @@ function startTournamentMatch() {
   const oppNames = nm.opponent.name.split(' & ');
   const t0 = [me], t1 = [{ name: oppNames[0], color: oppColor, level: nm.level }];
   if (ts.doubles) { t0.push({ name: 'Partner', color: me.color, level: 'advanced' }); t1.push({ name: oppNames[1] || 'Partner', color: oppColor, level: nm.level }); }
+  assignChars([...t0, ...t1]);
   const m = createMatch({ doubles: ts.doubles, format: ts.format, target: ts.target, games: 1, teams: [t0, t1] });
   S = matchSession('match', m, [{ id: 0, scheme: 'solo' }], { mode: 'tournament', myTeam: 0, restart: startTournamentMatch, roundName: nm.roundName });
   enterGame();
@@ -205,7 +322,7 @@ function startTournamentMatch() {
 
 function startPractice(drill) {
   if (S?.type === 'practice') savePractice();
-  const pr = createPractice(drill, { name: settings.name, color: settings.color });
+  const pr = createPractice(drill, { name: settings.name, color: settings.color, char: settings.char });
   S = { type: 'practice', pr, humans: [{ id: 0, scheme: 'solo' }], view: 'near', paused: false, restart: () => startPractice(drill) };
   $('#hud-practice .pc-title').textContent = pr.info.name;
   $('#hud-practice .pc-goal').textContent = pr.info.goal;
@@ -315,20 +432,73 @@ function renderPracticeHud(pr) {
 }
 
 // ---------------------------------------------------------------- main loop
-let last = performance.now(), booted = false, fpsFrames = 0, fpsT = 0;
-const fpsEl = $('#fps');
+let last = performance.now(), booted = false, pausedDrawn = false;
+
+/**
+ * Frame pacing. When the browser can't present 60 frames a second (measured:
+ * two 2-second windows averaging over 24 ms), draw every other display frame
+ * for an even 30 FPS instead of an uneven 20-30. Physics keeps its fixed 120 Hz
+ * step with interpolation, so game speed and ball behavior are unchanged.
+ * It locks once per session and never flips back and forth.
+ */
+const pacing = {
+  half: false, tick: 0, win: 0, n: 0, start: 0, strikes: 0,
+  sample(ms, now) {
+    if (this.half || document.hidden || ms > 250 || !S || S.paused) return;
+    this.win += ms; this.n++;
+    if (now - this.start < 2000) return;
+    const avg = this.win / this.n;
+    this.win = 0; this.n = 0; this.start = now;
+    this.strikes = avg > 24 ? this.strikes + 1 : 0;
+    if (this.strikes >= 2) { this.half = true; console.info('Frame pacing: locked to 30 FPS for even frame times.'); }
+  },
+};
+const dev = { el: $('#fps'), frames: [], t: 0, simMs: 0, drawMs: 0, n: 0 };
+
+/** Developer-only performance monitor (Settings -> Developer mode, or F3). */
+function devMonitor(ms, now) {
+  dev.frames.push(ms);
+  if (now - dev.t < 500) return;
+  dev.t = now;
+  dev.el.hidden = !settings.dev;
+  if (!settings.dev) { dev.frames.length = 0; dev.simMs = dev.drawMs = dev.n = 0; return; }
+  const f = dev.frames, avg = f.reduce((a, b) => a + b, 0) / f.length, max = Math.max(...f);
+  dev.hist = (dev.hist || []).concat(1000 / avg).slice(-20);
+  const lines = [
+    `FPS ${Math.round(1000 / avg)}  avg ${Math.round(dev.hist.reduce((a, b) => a + b, 0) / dev.hist.length)}  min ${Math.round(1000 / max)}`,
+    `frame ${avg.toFixed(1)} ms  max ${max.toFixed(1)} ms`,
+    `CPU sim ${(dev.simMs / Math.max(1, dev.n)).toFixed(2)} ms  render ${(dev.drawMs / Math.max(1, dev.n)).toFixed(2)} ms`,
+    `${gfx === '3d' ? `3D ${level}` : 'Lite 2D'}  ·  ${gpuInfo.gpu.replace(/^ANGLE \((.*)\)$/, '$1').slice(0, 42)}`,
+  ];
+  if (gfx === '3d') {
+    const i = renderer3d.renderer.info;
+    lines.push(`draw calls ${i.render.calls}  triangles ${(i.render.triangles / 1000).toFixed(0)}k  geo ${i.memory.geometries}  tex ${i.memory.textures}`);
+  }
+  if (performance.memory) lines.push(`JS heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(1)} MB`);
+  lines.push(`players ${S?.m ? S.m.players.length : S?.pr ? 1 : 0}  ·  F3 hides this`);
+  dev.el.textContent = lines.join('\n');
+  f.length = 0; dev.simMs = dev.drawMs = dev.n = 0;
+}
+
 function frame(now) {
+  if (pacing.half && (pacing.tick++ & 1)) { requestAnimationFrame(frame); return; }
   const ms = now - last;
   const dt = Math.min(0.05, ms / 1000);
   last = now;
-  fpsFrames++; fpsT += ms;
-  if (fpsT >= 500) {
-    fpsEl.hidden = !settings.fps;
-    if (settings.fps) fpsEl.textContent = `${Math.round((fpsFrames * 1000) / fpsT)} FPS`;
-    fpsFrames = 0; fpsT = 0;
-  }
+  perf.sample(ms, now);
+  pacing.sample(ms, now);
+  const t0 = performance.now();
   if (S && !S.paused) update(dt);
-  if (S) draw(dt);
+  const t1 = performance.now();
+  // While paused, the picture doesn't change: draw once, then stop rendering.
+  // Behind menus on a broken-GPU browser, redraw the demo only every 6th frame:
+  // an unchanged canvas composites cheaply, so the menu itself stays responsive.
+  const menuThrottle = brokenGPU && screen && S?.type === 'demo' && (dev.n % 6) !== 0;
+  if (S && !menuThrottle && (!S.paused || !pausedDrawn)) { draw(dt); pausedDrawn = !!S.paused; }
+  if (S && !S.paused) pausedDrawn = false;
+  const t2 = performance.now();
+  dev.simMs += t1 - t0; dev.drawMs += t2 - t1; dev.n++;
+  devMonitor(ms, now);
   if (!booted) { booted = true; const boot = $('#boot'); boot.classList.add('done'); setTimeout(() => boot.remove(), 500); }
   requestAnimationFrame(frame);
 }
@@ -474,6 +644,33 @@ $$('#scr-setup .seg[data-key]').forEach(seg => seg.addEventListener('click', e =
   onShow['scr-setup']();
 }));
 
+/** Scrollable row of character portraits; the selected one is highlighted. */
+function charPicker(current, colorIdx, onPick) {
+  const wrap = document.createElement('div');
+  wrap.className = 'char-picker';
+  wrap.setAttribute('role', 'listbox');
+  wrap.setAttribute('aria-label', 'Choose a character');
+  for (const c of CHARACTERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = c.id === current ? 'char on' : 'char';
+    b.setAttribute('aria-pressed', c.id === current);
+    const cv = document.createElement('canvas');
+    cv.width = 196; cv.height = 256;   // drawn at 2x for sharp portraits
+    drawPortrait(cv, c, PLAYER_COLORS[colorIdx % PLAYER_COLORS.length]);
+    const label = document.createElement('span');
+    label.textContent = c.name;
+    b.append(cv, label);
+    b.addEventListener('click', () => {
+      onPick(c.id);
+      wrap.querySelectorAll('.char').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    });
+    wrap.append(b);
+  }
+  requestAnimationFrame(() => wrap.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'center' }));
+  return wrap;
+}
+
 function swatches(current, onPick) {
   const wrap = document.createElement('div');
   wrap.className = 'swatches';
@@ -496,12 +693,12 @@ onShow['scr-setup'] = () => {
   const lvl = LEVELS[setup.level].label;
   const n = setup.doubles;
   if (mode === 'local') {
-    card('Near side · Player 1 · WASD + F/G/R/Q', '', [nameInput(settings.name, 'name', settings), swatches(settings.color, i => { settings.color = i; store.set('settings', settings); })]);
+    card('Near side · Player 1 · WASD + F/G/R/Q', '', [nameInput(settings.name, 'name', settings), swatches(settings.color, i => { settings.color = i; store.set('settings', settings); }), charPicker(settings.char, settings.color, id => { settings.char = id; store.set('settings', settings); })]);
     if (n) card('Near side partner', `<span class="who">CPU · ${lvl}</span>`);
-    card('Far side · Player 2 · Arrows + . , / Enter', '', [nameInput(setup.p2name, 'p2name', setup), swatches(setup.p2color, i => { setup.p2color = i; store.set('setup', setup); })]);
+    card('Far side · Player 2 · Arrows + . , / Enter', '', [nameInput(setup.p2name, 'p2name', setup), swatches(setup.p2color, i => { setup.p2color = i; store.set('setup', setup); }), charPicker(setup.p2char, setup.p2color, id => { setup.p2char = id; store.set('setup', setup); })]);
     if (n) card('Far side partner', `<span class="who">CPU · ${lvl}</span>`);
   } else {
-    card('You', '', [nameInput(settings.name, 'name', settings), swatches(settings.color, i => { settings.color = i; store.set('settings', settings); })]);
+    card('You', '', [nameInput(settings.name, 'name', settings), swatches(settings.color, i => { settings.color = i; store.set('settings', settings); }), charPicker(settings.char, settings.color, id => { settings.char = id; store.set('settings', settings); })]);
     if (n) card('Your partner', `<span class="who">CPU · ${mode === 'tournament' ? 'Advanced' : lvl}</span>`);
     const opp = mode === 'online' ? 'Your friend (joins with the room code)' : mode === 'tournament' ? 'Seven entrants, rated by skill' : `CPU · ${lvl}`;
     card(n && mode !== 'tournament' ? 'Opponents' : 'Opponent', `<span class="who">${opp}${n && mode === 'online' ? ' + CPU partner' : n && mode === 'quick' ? ' (×2)' : ''}</span>`);
@@ -678,6 +875,7 @@ onShow['scr-settings'] = () => {
   $('#set-volume').value = settings.volume;
   const sw = $('#set-color');
   sw.replaceWith(Object.assign(swatches(settings.color, i => { settings.color = i; store.set('settings', settings); }), { id: 'set-color' }));
+  $('#set-char').replaceWith(Object.assign(charPicker(settings.char, settings.color, id => { settings.char = id; store.set('settings', settings); }), { id: 'set-char' }));
 };
 $('#set-name').addEventListener('input', e => { settings.name = e.target.value; store.set('settings', settings); });
 $('#set-volume').addEventListener('input', e => { settings.volume = Number(e.target.value); setVolume(settings.volume); store.set('settings', settings); });
@@ -685,6 +883,7 @@ $$('#scr-settings .seg[data-set]').forEach(seg => seg.addEventListener('click', 
   const b = e.target.closest('button'); if (!b) return;
   settings[seg.dataset.set] = cast(b.dataset.v);
   store.set('settings', settings);
+  if (seg.dataset.set === 'graphics') applyGraphics();
   syncSegs();
 }));
 
@@ -719,17 +918,24 @@ function startHostMatch() {
   const me = you(), c2 = otherColor(me.color), names = pickCpu(2);
   const t0 = [me], t1 = [{ name: 'Guest', color: c2, ctrl: 'remote' }];
   if (setup.doubles) { t0.push({ name: names[0], color: me.color, level: setup.level }); t1.push({ name: names[1], color: c2, level: setup.level }); }
+  assignChars([...t0, ...t1]);
   const m = createMatch({ ...matchCfg(), teams: [t0, t1] });
   const remote = m.teams[1][0];
   S = matchSession('match', m, [{ id: 0, scheme: 'solo' }], { mode: 'online', myTeam: 0, online: true, room, remoteId: remote.id, restart: startHostMatch, frame: 0 });
-  room.send({ t: 'start', players: m.players.map(p => ({ id: p.id, team: p.team, color: p.color, name: p.name })), you: remote.id });
+  room.send({ t: 'start', players: roster(m), you: remote.id });
   enterGame();
 }
+
+const roster = m => m.players.map(p => ({ id: p.id, team: p.team, color: p.color, name: p.name, char: p.char }));
 
 function hostData(d) {
   if (!S?.online) return;
   const m = S.m, p = m.players[S.remoteId];
-  if (d.t === 'hello' && typeof d.name === 'string') { p.name = d.name.slice(0, 16) || 'Guest'; }
+  if (d.t === 'hello' && typeof d.name === 'string') {
+    p.name = d.name.slice(0, 16) || 'Guest';
+    if (CHARACTERS.some(c => c.id === d.char)) p.char = d.char;
+    S.room?.send({ t: 'roster', players: roster(m) });
+  }
   else if (d.t === 'in') {
     const n = v => (Number.isFinite(v) ? C.clamp(v, -1, 1) : 0);
     Object.assign(p.intent, { mx: n(d.mx), mz: n(d.mz), aimX: n(d.ax), aimZ: n(d.az) });
@@ -760,7 +966,7 @@ function join(code) {
   closeRoom();
   joinStatus('Connecting…');
   room = joinRoom(code, {
-    onOpen: () => { joinStatus('Connected! Waiting for the host…'); room.send({ t: 'hello', name: settings.name || 'Guest' }); },
+    onOpen: () => { joinStatus('Connected! Waiting for the host…'); room.send({ t: 'hello', name: settings.name || 'Guest', char: settings.char }); },
     onData: guestData,
     onClose: () => disconnected('The host left the match.'),
     onError: msg => { joinStatus(msg, true); closeRoom(); },
@@ -779,6 +985,8 @@ function guestData(d) {
   if (d.t === 'start') {
     S = { type: 'guest', room, humans: [{ id: d.you, scheme: 'solo' }], players: d.players, you: d.you, view: 'far', snap: null, snapAt: 0, hud: null, paused: false, myTeam: 1, mode: 'online', humanIds: [d.you], humanTeams: [1] };
     enterGame();
+  } else if (d.t === 'roster' && S?.type === 'guest') {
+    S.players = d.players;
   } else if (d.t === 's' && S?.type === 'guest') {
     S.snap = d; S.snapAt = performance.now();
     if (d.hud) S.hud = d.hud;
@@ -803,7 +1011,7 @@ function guestModel() {
     const a = s ? s.p[i] : [0, C.teamZ(p.team) * 20, 0, 0, 0, 'drive'];
     const age = s ? Math.min(0.1, (performance.now() - S.snapAt) / 1000) : 0;
     const own = p.id === S.you && S.localSwing;
-    return { id: p.id, team: p.team, color: p.color, x: a[0] + a[2] * age, z: a[1] + a[3] * age, vx: a[2], vz: a[3], swingAnim: own ? S.localSwing.t : a[4], swingKind: own ? S.localSwing.kind : a[5], human: p.id === S.you };
+    return { id: p.id, team: p.team, color: p.color, char: p.char, x: a[0] + a[2] * age, z: a[1] + a[3] * age, vx: a[2], vz: a[3], swingAnim: own ? S.localSwing.t : a[4], swingKind: own ? S.localSwing.kind : a[5], human: p.id === S.you };
   });
   let ball = { x: 0, y: 2, z: 0, visible: false };
   if (s) {
@@ -821,6 +1029,11 @@ function disconnected(msg) {
 
 // ---------------------------------------------------------------- boot
 startDemo();
+applyGraphics();
+if (brokenGPU && !store.get('gpuTipDismissed', false)) {
+  $('#gpu-tip').hidden = false;
+  $('#gpu-tip button').addEventListener('click', () => { $('#gpu-tip').hidden = true; store.set('gpuTipDismissed', true); });
+}
 show('scr-main', false);
 const invite = new URLSearchParams(location.search).get('room');
 if (invite) {
