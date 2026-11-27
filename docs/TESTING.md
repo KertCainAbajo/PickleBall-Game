@@ -3,7 +3,7 @@
 ## Running the engine tests
 
 ```sh
-python -m http.server 8000
+python serve.py
 ```
 
 Open http://localhost:8000/tests/. The page runs every test in the browser and shows pass or fail for each. The tab title becomes `PASS n/n` or `FAIL n/n`.

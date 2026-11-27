@@ -6,7 +6,7 @@ import { createTournament, nextMatch, recordResult, entrant, ROUND_NAMES } from 
 import { createScore, rallyWon, scoreCall } from './engine/scoring.js';
 import { firstBounce, renderAlpha, lerpPos } from './engine/world.js';
 import { Renderer2D, PLAYER_COLORS } from './render/render2d.js';
-import { CHARACTERS, charById, pickCharacters, drawPortrait } from './render/characters.js';
+import { CHARACTERS, charById, pickCharacters, drawPortrait, drawPreview } from './render/characters.js';
 import { hudModel, sceneModel, resultsModel, fmtTime } from './app/view.js';
 import { LESSONS } from './app/lessons.js';
 import { hostRoom, joinRoom } from './net.js';
@@ -644,8 +644,34 @@ $$('#scr-setup .seg[data-key]').forEach(seg => seg.addEventListener('click', e =
   onShow['scr-setup']();
 }));
 
-/** Scrollable row of character portraits; the selected one is highlighted. */
+// Animated previews in character pickers: one shared loop, only while a picker is on screen.
+const previews = new Set();
+let previewRaf = 0;
+function previewLoop(now) {
+  previewRaf = 0;
+  for (const pv of previews) {
+    if (!pv.canvas.isConnected) { previews.delete(pv); continue; }
+    if (pv.canvas.offsetParent) drawPreview(pv.canvas, charById(pv.id), pv.color, (now - pv.start) / 1000);
+  }
+  if (previews.size) previewRaf = requestAnimationFrame(previewLoop);
+}
+
+/** Scrollable row of character portraits with a live animated preview of the selected one. */
 function charPicker(current, colorIdx, onPick) {
+  const box = document.createElement('div');
+  box.className = 'char-pick-box';
+  const stage = document.createElement('div');
+  stage.className = 'char-stage';
+  const cv = document.createElement('canvas');
+  cv.width = 300; cv.height = 380;
+  cv.setAttribute('aria-label', 'Selected character preview');
+  const nameEl = document.createElement('b');
+  nameEl.textContent = charById(current).name;
+  stage.append(cv, nameEl);
+  const pv = { canvas: cv, id: current, color: PLAYER_COLORS[colorIdx % PLAYER_COLORS.length], start: performance.now() };
+  previews.add(pv);
+  if (!previewRaf) previewRaf = requestAnimationFrame(previewLoop);
+
   const wrap = document.createElement('div');
   wrap.className = 'char-picker';
   wrap.setAttribute('role', 'listbox');
@@ -663,12 +689,15 @@ function charPicker(current, colorIdx, onPick) {
     b.append(cv, label);
     b.addEventListener('click', () => {
       onPick(c.id);
+      pv.id = c.id; pv.start = performance.now();   // restart: the new pick swings straight away
+      nameEl.textContent = c.name;
       wrap.querySelectorAll('.char').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
     });
     wrap.append(b);
   }
   requestAnimationFrame(() => wrap.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'center' }));
-  return wrap;
+  box.append(stage, wrap);
+  return box;
 }
 
 function swatches(current, onPick) {

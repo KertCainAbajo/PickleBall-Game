@@ -492,3 +492,50 @@ export function drawPortrait(canvas, c, teamColor = '#2f6fe0') {
   const s = H / 4.6;
   drawCharacter(g, c, W / 2, H + 2.4 * s - 6 * s * ((c.build || 1) - 1), s, { near: false, side: -1, paddle: teamColor, crouch: 0.15, hand: { dx: 0.5, h: 4.1, ang: 0.35 } });
 }
+
+// ------------------------------------------------------------------ animated preview
+
+// Drive keyframes: [hand dx (ft), hand height (ft), paddle angle], plus shoulder twist and knee bend.
+const PREVIEW_SWING = {
+  hand: [[0.4, 4.05, 0.2], [1.3, 3.35, 1.9], [1.0, 3.7, 1.25], [-0.55, 5.0, -0.9]],
+  twist: [0, 0.85, 0.1, -0.85],
+  crouch: [0.35, 0.6, 0.5, 0.35],
+};
+const smooth = t => t * t * (3 - 2 * t);
+const lerpArr = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+
+/**
+ * Pose for the character-select preview, looping every 4.2 s:
+ * ready -> forehand swing -> ready -> side-shuffle -> ready. Selecting a
+ * character restarts the loop, so the new pick swings straight away.
+ */
+export function previewPose(t) {
+  const loop = t % 4.2;
+  const base = { time: t, crouch: 0.35, run: 0, lat: 0, latDir: 1, phase: 0, lean: 0, twist: 0, shift: 0 };
+  if (loop >= 0.3 && loop < 0.9) {
+    const s = (loop - 0.3) / 0.6, K = PREVIEW_SWING;
+    const i = s < 0.35 ? 0 : s < 0.55 ? 1 : 2;
+    const e = smooth(i === 0 ? s / 0.35 : i === 1 ? (s - 0.35) / 0.2 : (s - 0.55) / 0.45);
+    const hand = lerpArr(K.hand[i], K.hand[i + 1], e);
+    return { ...base, hand: { dx: hand[0], h: hand[1], ang: hand[2] }, twist: K.twist[i] + (K.twist[i + 1] - K.twist[i]) * e, crouch: K.crouch[i] + (K.crouch[i + 1] - K.crouch[i]) * e };
+  }
+  if (loop >= 1.6 && loop < 3.0) {
+    const u = (loop - 1.6) / 1.4, env = Math.sin(u * Math.PI);   // ease in and out of the shuffle
+    const dir = Math.cos(u * Math.PI * 2);
+    return { ...base, run: 0.85 * env, lat: 1, latDir: dir >= 0 ? 1 : -1, phase: loop * 11, lean: 0.25 * dir * env, shift: Math.sin(u * Math.PI * 2) * 0.9, crouch: 0.3 };
+  }
+  return base;
+}
+
+/** Full-body animated preview of a character on a small court-colored stage. */
+export function drawPreview(canvas, c, teamColor, t) {
+  const g = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#24456f'); bg.addColorStop(0.72, '#13294a'); bg.addColorStop(0.72, '#2d64b4'); bg.addColorStop(1, '#244f92');
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(0, H * 0.86, W, Math.max(2, H * 0.012));   // a court line
+  const pose = previewPose(t), s = H / 7.6, x = W / 2 + pose.shift * s;
+  g.fillStyle = 'rgba(0,10,30,0.35)';
+  g.beginPath(); g.ellipse(x, H - 16, 1.1 * s, 0.28 * s, 0, 0, Math.PI * 2); g.fill();
+  drawCharacter(g, c, x, H - 16, s, { ...pose, near: false, side: -1, paddle: teamColor });
+}

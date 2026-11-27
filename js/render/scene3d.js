@@ -12,6 +12,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as C from '../engine/constants.js';
+import { charById } from './characters.js';
 
 const CDN = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/';
 // Built-in: an athletic mannequin shown in team kits. Its idle / walk / run clips
@@ -97,6 +98,87 @@ function shared() {
   };
   return SHARED;
 }
+/**
+ * Paint the mannequin as the chosen character. Regions come from the model's
+ * bind-pose vertex positions (metres, T-pose): feet < 0.10, knees 0.53,
+ * hips 1.04, neck 1.50, shoulders |x| 0.15, wrists |x| 0.71. One shared shader
+ * program; each player only has its own colour uniforms.
+ */
+function paintCharacter(mat, look) {
+  const col = c => new THREE.Color(c);
+  const sleeve = look.top === 'hoodie' || look.top === 'jacket' ? 2 : look.top === 'tee' || look.top === 'polo' ? 1 : 0;
+  const u = {
+    uSkin: { value: col(look.skin) }, uTop: { value: col(look.topColor) }, uBottom: { value: col(look.bottomColor) },
+    uShoes: { value: col(look.shoes) }, uInner: { value: col(look.inner || look.topColor) },
+    uSleeve: { value: sleeve }, uCrop: { value: look.top === 'crop' ? 1 : 0 }, uJacket: { value: look.top === 'jacket' ? 1 : 0 },
+    uFullLeg: { value: ['joggers', 'leggings', 'camo'].includes(look.bottom) ? 1 : 0 },
+  };
+  mat.color.set(0xffffff);
+  mat.roughness = 0.62;
+  mat.metalness = 0.02;
+  mat.userData.look = u;
+  mat.customProgramCacheKey = () => 'pickle-character-paint';
+  mat.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, u);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vBind;
+uniform vec3 uSkin, uTop, uBottom, uShoes, uInner;
+uniform float uSleeve, uCrop, uJacket, uFullLeg;
+vec3 regionColor(vec3 p) {
+  float ax = abs(p.x);
+  if (ax > 0.17 && p.y > 1.25) {                      // arms (T-pose)
+    if (ax > 0.69) return uSkin;                      // hands
+    if (uSleeve > 1.5) return uTop;                   // long sleeves
+    if (uSleeve > 0.5 && ax < 0.30) return uTop;      // short sleeves
+    return uSkin;
+  }
+  if (p.y > 1.47) return uSkin;                       // neck and head
+  if (p.y > 0.98) {                                   // torso
+    if (uCrop > 0.5 && p.y < 1.22) return uSkin;
+    if (uJacket > 0.5 && ax < 0.055 && p.z > 0.0) return uInner;
+    return uTop;
+  }
+  if (p.y > 0.60) return uBottom;                     // hips / shorts / skirt
+  if (p.y > 0.10) return uFullLeg > 0.5 ? uBottom : uSkin;
+  return uShoes;
+}`)
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= regionColor(vBind);');
+  };
+  mat.needsUpdate = true;
+}
+
+/** Hair and headwear as simple meshes attached to the head bone (units: cm, bone space). */
+function hairGroup(look, matFor) {
+  const g = new THREE.Group(), hair = matFor(look.hairColor, 0.85), acc = matFor(look.accColor || '#ffffff', 0.6);
+  const cap = (r, cut) => new THREE.SphereGeometry(r, 20, 12, 0, Math.PI * 2, 0, Math.PI * cut);
+  const add = (geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); m.rotation.x = rx;
+    m.castShadow = true; m.userData.shared = true; g.add(m); return m;
+  };
+  switch (look.hair) {
+    case 'bald': break;
+    case 'buzz': add(cap(11.3, 0.5), hair, 0, 9, 0.5); break;
+    case 'curly': add(new THREE.IcosahedronGeometry(13, 1), hair, 0, 12, -0.5, 1, 0.82, 1); break;
+    case 'swept': add(cap(11.8, 0.52), hair, 0, 9.5, 0); add(cap(9, 0.5), hair, 1.5, 16, 3, 1.1, 0.6, 1); break;
+    default:
+      add(cap(11.8, 0.55), hair, 0, 9, 0.5);
+      if (look.hair === 'long') add(new THREE.BoxGeometry(21, 24, 5), hair, 0, -3, -8.5);
+      if (look.hair === 'ponytail') add(new THREE.CylinderGeometry(2.6, 1.4, 16, 10), hair, 0, 4, -14, 1, 1, 1, 0.5);
+      if (look.hair === 'bun') add(new THREE.SphereGeometry(5.5, 12, 10), hair, 0, 21, -5);
+  }
+  if (look.acc.includes('headband')) add(new THREE.CylinderGeometry(11.9, 11.9, 2.6, 24, 1, true), acc, 0, 13, 0.5);
+  if (look.acc.includes('cap')) {
+    add(cap(12.3, 0.5), acc, 0, 10, 0.5);
+    add(new THREE.CylinderGeometry(9, 9, 0.8, 20, 1, false, -Math.PI / 2, Math.PI), acc, 0, 10.5, 6, 1, 1, 1.2);
+  }
+  if (look.acc.includes('beard')) add(cap(10.6, 0.35), matFor(look.accColor || look.hairColor, 0.9), 0, 6, 2.2, 1, 1, 1, Math.PI);
+  return g;
+}
+
 // Scratch objects for the contact reach (no per-frame allocation).
 const _c1 = new THREE.Vector3(), _c2 = new THREE.Vector3(), _c3 = new THREE.Vector3(), _c4 = new THREE.Vector3();
 
@@ -548,11 +630,8 @@ export class Renderer3D {
         if (!o.isMesh) return;
         o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
         o.material = o.material.clone();
-        // The mannequin wears its team's kit; joints stay dark.
-        if (gltf === this.gltf.xbot) {
-          if (/Joints/i.test(o.material.name)) o.material.color.set(0x24272c);
-          else { o.material.color.copy(team); o.material.roughness = 0.55; }
-        }
+        // The mannequin is painted as the chosen character (skin, clothes, shoes).
+        if (gltf === this.gltf.xbot) paintCharacter(o.material, charById(p.char));
       });
       model.scale.setScalar(FEET_PER_M);
       root.add(model);
@@ -566,6 +645,16 @@ export class Renderer3D {
       a.mixer = mixer;
       const bone = n => model.getObjectByName(`mixamorig${n}`) || model.getObjectByName(`mixamorig:${n}`);
       a.bones = { arm: bone('RightArm'), fore: bone('RightForeArm'), hand: bone('RightHand'), spine: bone('Spine1') };
+      const head = bone('Head');
+      if (head && gltf === this.gltf.xbot) {
+        const matFor = (color, rough) => {
+          const key = `hair${color}|${rough}`;
+          if (!this.matCache.has(key)) this.matCache.set(key, new THREE.MeshStandardMaterial({ color, roughness: rough }));
+          return this.matCache.get(key);
+        };
+        a.hair = hairGroup(charById(p.char), matFor);
+        head.add(a.hair);
+      }
     } else {
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.6, 3.6, 6, 12), new THREE.MeshStandardMaterial({ color: team, roughness: 0.6 }));
       body.position.y = 2.9; body.castShadow = true; body.userData.own = true; root.add(body);
@@ -587,6 +676,7 @@ export class Renderer3D {
     if (a.mixer) { a.mixer.stopAllAction(); a.mixer.uncacheRoot(a.mixer.getRoot()); }
     a.root.traverse(o => {
       if (!o.isMesh) return;
+      if (o.userData.shared) { o.geometry.dispose(); return; }   // hair: own geometry, cached material
       [].concat(o.material).forEach(m => m.dispose());   // materials were cloned per player
       if (o.isSkinnedMesh) o.skeleton.dispose();         // each cloned skeleton owns a bone texture
       if (o.userData.own) o.geometry.dispose();          // model geometry is shared with the loaded file

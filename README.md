@@ -10,7 +10,7 @@ A pickleball game for the browser, played to USA Pickleball rules. Singles and d
 ## Play locally
 
 ```sh
-python -m http.server 8000
+python serve.py
 ```
 
 Open http://localhost:8000. Engine tests are at http://localhost:8000/tests/.
